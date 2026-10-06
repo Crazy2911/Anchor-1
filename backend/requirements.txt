@@ -1,5 +1,6 @@
 groq==1.7.0
-httpx
+httpx>=0.27,<1
 psycopg[binary]>=3.2,<4
 fastapi
 uvicorn
+Pillow>=12,<13

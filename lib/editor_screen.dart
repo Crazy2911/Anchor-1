@@ -4,6 +4,12 @@ import 'repository.dart';
 import 'app_state.dart';
 import 'models.dart';
 import 'widgets.dart';
+import 'dart:typed_data';
+
+import 'package:file_selector/file_selector.dart';
+
+import 'api_feed_repository.dart';
+import 'community_post_image.dart';
 
 enum EditorKind { goal, habit, reflection, post, profile }
 
@@ -52,6 +58,160 @@ class _EditorScreenState extends State<EditorScreen> {
   bool get editing => widget.args.id != null;
   String? draftId;
   String? aiError;
+  Uint8List? selectedImageBytes;
+  String? selectedImageType;
+  String? uploadedImageId;
+  bool imageChanged = false;
+  bool pickingImage = false;
+  Future<void> pickPostImage() async {
+    final state = context.read<AppState>();
+
+    if (state.busy || pickingImage) return;
+
+    setState(() => pickingImage = true);
+
+    try {
+      const images = XTypeGroup(
+        label: 'Images',
+        extensions: ['jpg', 'jpeg', 'png', 'webp'],
+        mimeTypes: ['image/jpeg', 'image/png', 'image/webp'],
+        uniformTypeIdentifiers: [
+          'public.jpeg',
+          'public.png',
+          'org.webmproject.webp',
+        ],
+      );
+
+      final file = await openFile(acceptedTypeGroups: [images]);
+
+      if (file == null) return;
+
+      if (await file.length() > 2 * 1024 * 1024) {
+        throw const RepositoryException(
+          'Choose an image no larger than 2 MiB.',
+        );
+      }
+
+      final extension = file.name.split('.').last.toLowerCase();
+
+      const types = {
+        'jpg': 'image/jpeg',
+        'jpeg': 'image/jpeg',
+        'png': 'image/png',
+        'webp': 'image/webp',
+      };
+
+      final contentType = types[extension];
+
+      if (contentType == null) {
+        throw const RepositoryException('Choose a JPEG, PNG, or WebP image.');
+      }
+
+      final bytes = await file.readAsBytes();
+
+      if (bytes.isEmpty || bytes.length > 2 * 1024 * 1024) {
+        throw const RepositoryException(
+          'Choose a non-empty image no larger than 2 MiB.',
+        );
+      }
+
+      if (!mounted) return;
+
+      setState(() {
+        selectedImageBytes = bytes;
+        selectedImageType = contentType;
+        uploadedImageId = null;
+        imageChanged = true;
+      });
+    } on RepositoryException catch (error) {
+      if (!mounted) return;
+
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(error.message)));
+    } catch (_) {
+      if (!mounted) return;
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Could not open that image.')),
+      );
+    } finally {
+      if (mounted) {
+        setState(() => pickingImage = false);
+      }
+    }
+  }
+
+  void removePostImage() {
+    if (context.read<AppState>().busy || pickingImage) return;
+
+    setState(() {
+      selectedImageBytes = null;
+      selectedImageType = null;
+      uploadedImageId = null;
+      imageChanged = true;
+    });
+  }
+
+  Widget postImageControls(bool busy) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const Text(
+          'Post image — optional',
+          style: TextStyle(fontWeight: FontWeight.bold),
+        ),
+        const SizedBox(height: 8),
+        const Text(
+          'JPEG, PNG or WebP, up to 2 MiB. '
+          'The image becomes visible to the community when published.',
+        ),
+        if (selectedImageBytes != null)
+          Padding(
+            padding: const EdgeInsets.symmetric(vertical: 12),
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(16),
+              child: Image.memory(
+                selectedImageBytes!,
+                height: 220,
+                width: double.infinity,
+                fit: BoxFit.contain,
+                errorBuilder: (context, error, stackTrace) {
+                  return const Text(
+                    'Cannot preview this image. Please choose another.',
+                  );
+                },
+              ),
+            ),
+          )
+        else if (!imageChanged && existingPost != null)
+          CommunityPostImage(post: existingPost!),
+        if (imageChanged && selectedImageBytes == null)
+          const Padding(
+            padding: EdgeInsets.symmetric(vertical: 8),
+            child: Text('This post will have no image when saved.'),
+          ),
+        Wrap(
+          spacing: 8,
+          children: [
+            OutlinedButton.icon(
+              onPressed: busy || pickingImage ? null : pickPostImage,
+              icon: const Icon(Icons.add_photo_alternate_outlined),
+              label: Text(pickingImage ? 'Opening…' : 'Choose / replace image'),
+            ),
+            if (selectedImageBytes != null ||
+                (!imageChanged && existingPost != null))
+              TextButton.icon(
+                onPressed: busy || pickingImage ? null : removePostImage,
+                icon: const Icon(Icons.delete_outline),
+                label: const Text('Remove image'),
+              ),
+          ],
+        ),
+        const SizedBox(height: 16),
+      ],
+    );
+  }
 
   Future<void> suggestPlan() async {
     final state = context.read<AppState>();
@@ -117,12 +277,12 @@ class _EditorScreenState extends State<EditorScreen> {
             mainAxisSize: MainAxisSize.min,
             children: [
               const Text(
-              'The information shown below will be sent to Groq. '
-              'If Groq reaches its usage limit, it will also be sent '
-              'to Google Gemini for processing. '
-              'Private reflections are not included. '
-              'You can review the suggestion before applying it.',
-            ),
+                'The information shown below will be sent to Groq. '
+                'If Groq reaches its usage limit, it will also be sent '
+                'to Google Gemini for processing. '
+                'Private reflections are not included. '
+                'You can review the suggestion before applying it.',
+              ),
               const SizedBox(height: 16),
               SelectableText(preview),
             ],
@@ -479,12 +639,12 @@ class _EditorScreenState extends State<EditorScreen> {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               const Text(
-              'Only this draft’s title, body and topic will be sent '
-              'to Groq. If Groq reaches its usage limit, the same '
-              'information will also be sent to Google Gemini. '
-              'Your private reflections are not included. '
-              'You can review the suggestion before applying it.',
-            ),
+                'Only this draft’s title, body and topic will be sent '
+                'to Groq. If Groq reaches its usage limit, the same '
+                'information will also be sent to Google Gemini. '
+                'Your private reflections are not included. '
+                'You can review the suggestion before applying it.',
+              ),
               const SizedBox(height: 16),
               Text('Topic: $originalTopic'),
               const SizedBox(height: 8),
@@ -605,6 +765,13 @@ class _EditorScreenState extends State<EditorScreen> {
   }
 
   Future<void> save() async {
+    if (context.read<AppState>().busy ||
+        pickingImage ||
+        planning ||
+        improvingPost ||
+        aiLoading) {
+      return;
+    }
     if (!formKey.currentState!.validate()) return;
 
     if (kind == EditorKind.post && !publicConfirmed) {
@@ -655,19 +822,55 @@ class _EditorScreenState extends State<EditorScreen> {
         break;
 
       case EditorKind.post:
-        success = await state.run(
-          (repository) => repository.savePost(
-            CommunityPost(
-              id: id,
-              authorId: state.userId,
-              author: state.data!.profile.name,
-              title: title,
-              body: body,
-              topic: selectedTopic.trim(),
-              comments: existingPost?.comments ?? [],
-            ),
-          ),
+        final post = CommunityPost(
+          id: id,
+          authorId: state.userId,
+          author: state.data!.profile.name,
+          title: title,
+          body: body,
+          topic: selectedTopic.trim(),
+          comments: existingPost?.comments ?? [],
         );
+
+        final bytes = selectedImageBytes;
+        final contentType = selectedImageType;
+        final changeImage = imageChanged;
+
+        success = await state.run((repository) async {
+          if (!changeImage) {
+            await repository.savePost(post);
+            return;
+          }
+
+          if (repository is! ApiFeedRepository) {
+            throw const RepositoryException(
+              'Image uploads require the connected backend.',
+            );
+          }
+
+          // Upload before publishing text. Reuse a successful upload on retry.
+          if (bytes != null && uploadedImageId == null) {
+            uploadedImageId = await repository.uploadPostImage(
+              bytes,
+              contentType!,
+            );
+          }
+
+          await repository.savePost(post);
+
+          try {
+            await repository.setPostImage(
+              id,
+              bytes == null ? null : uploadedImageId,
+            );
+          } on RepositoryException catch (error) {
+            throw RepositoryException(
+              'Your post text was saved, but the image change was not '
+              'confirmed. Keep this editor open and press Publish again '
+              'to retry the same post. ${error.message}',
+            );
+          }
+        });
         break;
 
       case EditorKind.profile:
@@ -810,24 +1013,23 @@ class _EditorScreenState extends State<EditorScreen> {
                       ],
                       if (kind == EditorKind.post) ...[
                         TextFormField(
-                        key: ValueKey(topicFieldVersion),
-                        initialValue: selectedTopic,
-                        maxLength: 80,
-                        textCapitalization: TextCapitalization.sentences,
-                        decoration: const InputDecoration(
-                          labelText: 'Topic',
-                          hintText: 'For example: Gardening or Learning guitar',
-                          helperText: 'Enter a topic that describes your post.',
+                          key: ValueKey(topicFieldVersion),
+                          initialValue: selectedTopic,
+                          maxLength: 80,
+                          textCapitalization: TextCapitalization.sentences,
+                          decoration: const InputDecoration(
+                            labelText: 'Topic',
+                            hintText:
+                                'For example: Gardening or Learning guitar',
+                            helperText:
+                                'Enter a topic that describes your post.',
+                          ),
+                          onChanged: (value) {
+                            selectedTopic = value;
+                          },
+                          validator: (value) =>
+                              validateText(value, minimum: 1, maximum: 80),
                         ),
-                        onChanged: (value) {
-                          selectedTopic = value;
-                        },
-                        validator: (value) => validateText(
-                          value,
-                          minimum: 1,
-                          maximum: 80,
-                        ),
-                      ),
                         const SizedBox(height: 16),
                       ],
                       if (kind == EditorKind.reflection) ...[
@@ -936,12 +1138,13 @@ class _EditorScreenState extends State<EditorScreen> {
                       ],
                       if (kind == EditorKind.post) ...[
                         const SizedBox(height: 16),
+                        postImageControls(state.busy),
                         CheckboxListTile(
                           contentPadding: EdgeInsets.zero,
                           controlAffinity: ListTileControlAffinity.leading,
                           value: publicConfirmed,
                           title: const Text(
-                            'I intend to share this text with the community.',
+                            'I intend to share this post and its image with the community.',
                           ),
                           subtitle: const Text(
                             'Check that it does not include private information.',
@@ -1003,7 +1206,12 @@ class _EditorScreenState extends State<EditorScreen> {
                       SizedBox(
                         width: double.infinity,
                         child: FilledButton.icon(
-                          onPressed: state.busy || planning || improvingPost
+                          onPressed:
+                              state.busy ||
+                                  planning ||
+                                  improvingPost ||
+                                  aiLoading ||
+                                  pickingImage
                               ? null
                               : save,
                           icon: const Icon(Icons.check),

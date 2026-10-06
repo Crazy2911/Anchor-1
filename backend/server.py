@@ -1,6 +1,8 @@
 import json
 import logging
 import os
+import image_service
+from storage_service import StorageError, create_signed_url
 
 import psycopg
 from fastapi import Depends, FastAPI, Request
@@ -133,6 +135,54 @@ def require_user(request: Request):
     return auth.current_user(
         request.headers.get("Authorization")
     )
+@app.exception_handler(StorageError)
+async def storage_error_handler(request: Request, error: StorageError):
+    return JSONResponse(
+        status_code=error.status,
+        content={"message": error.message},
+        headers={"Cache-Control": "no-store"},
+    )
+
+
+async def read_image_upload(
+    request: Request,
+    user=Depends(require_user),
+):
+    content_type = (
+        request.headers.get("content-type", "")
+        .split(";", 1)[0]
+        .strip()
+        .lower()
+    )
+
+    if content_type not in {
+        "image/jpeg",
+        "image/png",
+        "image/webp",
+    }:
+        raise StorageError(
+            415, "Send a JPEG, PNG, or WebP image."
+        )
+
+    chunks = bytearray()
+
+    async for chunk in request.stream():
+        if len(chunks) + len(chunk) > image_service.MAX_INPUT_BYTES:
+            raise StorageError(
+                413, "Choose an image smaller than 2 MiB."
+            )
+        chunks.extend(chunk)
+
+    if not chunks:
+        raise StorageError(400, "Choose an image.")
+
+    return user, bytes(chunks)
+
+
+@app.post("/me/images", status_code=201)
+def upload_community_image(upload=Depends(read_image_upload)):
+    user, raw = upload
+    return image_service.create_image(user["id"], raw)
 
 
 def valid_id(value):
@@ -631,3 +681,147 @@ def next_action(
         })
 
     return ai_service.choose_next_action(selected)
+@app.put("/posts/{post_id}/image")
+def set_post_image(
+    post_id: str,
+    user=Depends(require_user),
+    data=Depends(json_body),
+):
+    if "imageId" not in data:
+        return JSONResponse(
+            status_code=400,
+            content={"message": "imageId is required."},
+        )
+
+    image_id = data["imageId"]
+
+    if image_id is not None:
+        if (
+            not isinstance(image_id, str)
+            or not image_id.strip()
+            or len(image_id) > 80
+        ):
+            return JSONResponse(
+                status_code=400,
+                content={"message": "Invalid image ID."},
+            )
+
+    with connect() as connection:
+        post = connection.execute(
+            """
+            SELECT id, author_id
+            FROM posts
+            WHERE id = %s
+            FOR UPDATE
+            """,
+            (post_id,),
+        ).fetchone()
+
+        if post is None:
+            return JSONResponse(
+                status_code=404,
+                content={"message": "This post no longer exists."},
+            )
+
+        if post["author_id"] != user["id"]:
+            return JSONResponse(
+                status_code=403,
+                content={"message": "You can only edit your own posts."},
+            )
+
+        if image_id is not None:
+            image = connection.execute(
+                """
+                SELECT id, owner_id, status
+                FROM community_images
+                WHERE id = %s
+                FOR UPDATE
+                """,
+                (image_id,),
+            ).fetchone()
+
+            if (
+                image is None
+                or image["owner_id"] != user["id"]
+                or image["status"] != "ready"
+            ):
+                return JSONResponse(
+                    status_code=400,
+                    content={
+                        "message": "Choose one of your completed uploads."
+                    },
+                )
+
+            linked_post = connection.execute(
+                """
+                SELECT id
+                FROM posts
+                WHERE image_id = %s AND id <> %s
+                """,
+                (image_id, post_id),
+            ).fetchone()
+
+            if linked_post is not None:
+                return JSONResponse(
+                    status_code=409,
+                    content={
+                        "message": "This image is already used by another post."
+                    },
+                )
+
+        connection.execute(
+            """
+            UPDATE posts
+            SET image_id = %s
+            WHERE id = %s
+            """,
+            (image_id, post_id),
+        )
+
+    return {
+        "postId": post_id,
+        "imageId": image_id,
+    }
+@app.get("/posts/{post_id}/image")
+def get_post_image(post_id: str):
+    with connect() as connection:
+        post = connection.execute(
+            """
+            SELECT
+                p.id,
+                i.id AS image_id,
+                i.object_path
+            FROM posts AS p
+            LEFT JOIN community_images AS i
+                ON i.id = p.image_id
+                AND i.status = 'ready'
+            WHERE p.id = %s
+            """,
+            (post_id,),
+        ).fetchone()
+
+    if post is None:
+        return JSONResponse(
+            status_code=404,
+            content={"message": "This post no longer exists."},
+        )
+
+    if post["image_id"] is None:
+        return {
+            "postId": post_id,
+            "imageId": None,
+            "imageUrl": None,
+            "expiresIn": 0,
+        }
+
+    image_url = create_signed_url(
+        post["object_path"],
+        expires_in=900,
+    )
+
+    return {
+        "postId": post_id,
+        "imageId": post["image_id"],
+        "imageUrl": image_url,
+        "expiresIn": 900,
+    }

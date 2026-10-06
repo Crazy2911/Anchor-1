@@ -8,6 +8,7 @@ import 'repository.dart';
 import 'widgets.dart';
 import 'discussion_assistant.dart';
 import 'daily_focus_card.dart';
+import 'community_post_image.dart';
 
 void openEditor(BuildContext context, EditorKind kind, {String? id}) {
   Navigator.pushNamed(
@@ -547,21 +548,19 @@ class _CommunityPageState extends State<CommunityPage> {
     final data = state.data;
 
     if (data == null) {
-      return const Center(
-        child: CircularProgressIndicator(),
-      );
+      return const Center(child: CircularProgressIndicator());
     }
 
-    final availableTopics = <String>{
-      for (final post in data.posts)
-        if (post.topic.trim().isNotEmpty) post.topic,
-      for (final followedTopic in data.followedTopics)
-        if (followedTopic.trim().isNotEmpty) followedTopic,
-    }.toList()
-      ..sort((a, b) {
-        final comparison = a.toLowerCase().compareTo(b.toLowerCase());
-        return comparison == 0 ? a.compareTo(b) : comparison;
-      });
+    final availableTopics =
+        <String>{
+          for (final post in data.posts)
+            if (post.topic.trim().isNotEmpty) post.topic,
+          for (final followedTopic in data.followedTopics)
+            if (followedTopic.trim().isNotEmpty) followedTopic,
+        }.toList()..sort((a, b) {
+          final comparison = a.toLowerCase().compareTo(b.toLowerCase());
+          return comparison == 0 ? a.compareTo(b) : comparison;
+        });
 
     // Fall back to all topics if the selected topic no longer exists.
     final activeTopic = availableTopics.contains(selectedTopic)
@@ -571,13 +570,11 @@ class _CommunityPageState extends State<CommunityPage> {
     final search = query.trim().toLowerCase();
 
     final posts = data.posts.where((post) {
-      final matchesText =
-          '${post.title} ${post.body} ${post.topic}'
-              .toLowerCase()
-              .contains(search);
+      final matchesText = '${post.title} ${post.body} ${post.topic}'
+          .toLowerCase()
+          .contains(search);
 
-      final matchesTopic =
-          activeTopic == null || activeTopic == post.topic;
+      final matchesTopic = activeTopic == null || activeTopic == post.topic;
 
       final matchesFollowing =
           !followingOnly || data.followedTopics.contains(post.topic);
@@ -585,8 +582,8 @@ class _CommunityPageState extends State<CommunityPage> {
       return matchesText && matchesTopic && matchesFollowing;
     }).toList();
 
-    final isFollowing = activeTopic != null &&
-        data.followedTopics.contains(activeTopic);
+    final isFollowing =
+        activeTopic != null && data.followedTopics.contains(activeTopic);
 
     return PageBody(
       children: [
@@ -662,8 +659,7 @@ class _CommunityPageState extends State<CommunityPage> {
                       final topicToToggle = activeTopic;
 
                       final success = await state.run(
-                        (repository) =>
-                            repository.toggleTopic(topicToToggle),
+                        (repository) => repository.toggleTopic(topicToToggle),
                       );
 
                       if (!context.mounted || success) return;
@@ -677,13 +673,9 @@ class _CommunityPageState extends State<CommunityPage> {
                         ),
                       );
                     },
-              icon: Icon(
-                isFollowing ? Icons.check : Icons.add,
-              ),
+              icon: Icon(isFollowing ? Icons.check : Icons.add),
               label: Text(
-                isFollowing
-                    ? 'Unfollow $activeTopic'
-                    : 'Follow $activeTopic',
+                isFollowing ? 'Unfollow $activeTopic' : 'Follow $activeTopic',
               ),
             ),
           ),
@@ -697,9 +689,7 @@ class _CommunityPageState extends State<CommunityPage> {
         ),
         const SizedBox(height: 12),
         if (posts.isEmpty)
-          const EmptyMessage(
-            'No matching posts. Try another search or topic.',
-          ),
+          const EmptyMessage('No matching posts. Try another search or topic.'),
         ...posts.map(
           (post) => EntryReveal(
             key: ValueKey(post.id),
@@ -738,6 +728,7 @@ class PostCard extends StatelessWidget {
           Text(post.title, style: Theme.of(context).textTheme.titleLarge),
           const SizedBox(height: 8),
           Text(post.body, maxLines: 3, overflow: TextOverflow.ellipsis),
+          CommunityPostImage(post: post),
           const SizedBox(height: 12),
           Text(
             '$author • ${post.comments.length} comments',
@@ -1118,6 +1109,8 @@ class _PostDetailScreenState extends State<PostDetailScreen> {
                   Text(ownPost ? data.profile.name : post.author),
                   const SizedBox(height: 20),
                   Text(post.body, style: Theme.of(context).textTheme.bodyLarge),
+                  Text(post.body, style: Theme.of(context).textTheme.bodyLarge),
+                  CommunityPostImage(post: post),
                   const SizedBox(height: 20),
                   Wrap(
                     spacing: 8,

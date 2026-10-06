@@ -5,6 +5,7 @@ import 'package:http/http.dart' as http;
 
 import 'models.dart';
 import 'repository.dart';
+import 'dart:typed_data';
 
 class ApiFeedRepository extends MemoryAnchorRepository {
   final String baseUrl;
@@ -47,7 +48,7 @@ class ApiFeedRepository extends MemoryAnchorRepository {
       final response = await (() async {
         final streamed = await client.send(request);
         return http.Response.fromStream(streamed);
-      })().timeout(const Duration(seconds: 10));
+      })().timeout(const Duration(seconds: 60));
 
       final decoded = jsonDecode(utf8.decode(response.bodyBytes));
 
@@ -176,9 +177,103 @@ class ApiFeedRepository extends MemoryAnchorRepository {
     return super.load();
   }
 
+  Future<String> uploadPostImage(Uint8List bytes, String contentType) async {
+    if (bytes.isEmpty || bytes.length > 2 * 1024 * 1024) {
+      throw const RepositoryException(
+        'Choose a non-empty image no larger than 2 MiB.',
+      );
+    }
+
+    final client = http.Client();
+
+    try {
+      final response = await client
+          .post(
+            Uri.parse('$_root/me/images'),
+            headers: {
+              'Authorization': 'Bearer $token',
+              'Content-Type': contentType,
+              'Accept': 'application/json',
+            },
+            body: bytes,
+          )
+          .timeout(const Duration(seconds: 90));
+
+      final decoded = jsonDecode(utf8.decode(response.bodyBytes));
+
+      if (decoded is! Map<String, dynamic>) {
+        throw const FormatException('Invalid upload response.');
+      }
+
+      if (response.statusCode != 201) {
+        throw RepositoryException(
+          decoded['message'] is String
+              ? decoded['message'] as String
+              : 'The image could not be uploaded.',
+        );
+      }
+
+      final imageId = decoded['imageId'];
+
+      if (imageId is! String || imageId.isEmpty) {
+        throw const FormatException('Missing image ID.');
+      }
+
+      return imageId;
+    } on TimeoutException {
+      throw const RepositoryException(
+        'Image upload timed out. Your draft is still here. Try again.',
+      );
+    } on http.ClientException {
+      throw const RepositoryException(
+        'Cannot reach the server to upload your image.',
+      );
+    } on FormatException {
+      throw const RepositoryException(
+        'The server returned an invalid image upload response.',
+      );
+    } finally {
+      client.close();
+    }
+  }
+
+  Future<void> setPostImage(String postId, String? imageId) async {
+    await _request(
+      'PUT',
+      '/posts/${Uri.encodeComponent(postId)}/image',
+      body: {'imageId': imageId},
+    );
+  }
+
   // ---------------------------------------------------------------------------
   // COMMUNITY POSTS — THESE MUST WRITE TO THE SERVER
   // ---------------------------------------------------------------------------
+  Future<String?> getPostImageUrl(String postId) async {
+    final response = await _request(
+      'GET',
+      '/posts/${Uri.encodeComponent(postId)}/image',
+    );
+
+    final value = response['imageUrl'];
+
+    if (value == null) return null;
+
+    if (value is! String) {
+      throw const RepositoryException(
+        'The server returned an invalid image link.',
+      );
+    }
+
+    final uri = Uri.tryParse(value);
+
+    if (uri == null || uri.scheme != 'https' || uri.host.isEmpty) {
+      throw const RepositoryException(
+        'The server returned an invalid image link.',
+      );
+    }
+
+    return value;
+  }
 
   @override
   Future<void> savePost(CommunityPost post) async {
