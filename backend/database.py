@@ -46,7 +46,29 @@ def connect():
         else:
             reason = "Database connection failed for an unclassified reason."
 
-        logging.getLogger(__name__).error("%s", reason)
+        from urllib.parse import unquote, urlsplit
+
+        # Remove the connection URL and password before logging details.
+        details = str(error).replace(database_url, "[DATABASE_URL]")
+
+        try:
+            password = urlsplit(database_url).password
+            if password:
+                for secret in sorted(
+                    {password, unquote(password)},
+                    key=len,
+                    reverse=True,
+                ):
+                    if secret:
+                        details = details.replace(secret, "[REDACTED]")
+        except ValueError:
+            details = "Connection URL could not be parsed."
+
+        logging.getLogger(__name__).error(
+            "%s Details: %s",
+            reason,
+            details,
+        )
         raise
 
     try:
