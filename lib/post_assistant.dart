@@ -3,7 +3,6 @@ import 'dart:convert';
 
 import 'package:http/http.dart' as http;
 
-import 'models.dart';
 import 'repository.dart';
 
 class PostSuggestion {
@@ -30,10 +29,7 @@ class RemotePostAssistant implements PostAssistant {
   final String baseUrl;
   final String token;
 
-  RemotePostAssistant({
-    required this.baseUrl,
-    required this.token,
-  });
+  RemotePostAssistant({required this.baseUrl, required this.token});
 
   @override
   Future<PostSuggestion> improve({
@@ -53,17 +49,11 @@ class RemotePostAssistant implements PostAssistant {
               'Content-Type': 'application/json',
               'Accept': 'application/json',
             },
-            body: jsonEncode({
-              'title': title,
-              'body': body,
-              'topic': topic,
-            }),
+            body: jsonEncode({'title': title, 'body': body, 'topic': topic}),
           )
           .timeout(const Duration(seconds: 90));
 
-      final decoded = jsonDecode(
-        utf8.decode(response.bodyBytes),
-      );
+      final decoded = jsonDecode(utf8.decode(response.bodyBytes));
 
       if (decoded is! Map<String, dynamic>) {
         throw const FormatException('Invalid response.');
@@ -103,27 +93,17 @@ class RemotePostAssistant implements PostAssistant {
       final suggestedBody = field('body', 10, 3000);
       final suggestedTopic = field('topic', 1, 80);
 
-      if (!topics.contains(suggestedTopic)) {
-        throw const FormatException('Unsupported topic.');
-      }
-
       return PostSuggestion(
         title: suggestedTitle,
         body: suggestedBody,
         topic: suggestedTopic,
       );
     } on TimeoutException {
-      throw const AssistantException(
-        'AI timed out. Your post is unchanged.',
-      );
+      throw const AssistantException('AI timed out. Your post is unchanged.');
     } on http.ClientException {
-      throw const AssistantException(
-        'Cannot reach the server.',
-      );
+      throw const AssistantException('Cannot reach the server.');
     } on FormatException {
-      throw const AssistantException(
-        'The suggestion could not be displayed.',
-      );
+      throw const AssistantException('The suggestion could not be displayed.');
     } finally {
       client.close();
     }
