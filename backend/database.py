@@ -1,5 +1,11 @@
 import os
-
+from pathlib import Path
+from dotenv import load_dotenv
+load_dotenv(
+    Path(__file__).resolve().parent / ".env",
+    override=False,
+    interpolate=False,
+)
 import psycopg
 from psycopg.rows import dict_row
 

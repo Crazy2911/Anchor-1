@@ -4,3 +4,4 @@ psycopg[binary]>=3.2,<4
 fastapi
 uvicorn
 Pillow>=12,<13
+python-dotenv>=1,<2
