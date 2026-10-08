@@ -1182,6 +1182,7 @@ class _EditorScreenState extends State<EditorScreen> {
                       const SizedBox(height: 24),
 
                       if (kind == EditorKind.post) ...[
+                        const SizedBox(height: 12),
                         OutlinedButton.icon(
                           onPressed: state.busy || improvingPost
                               ? null

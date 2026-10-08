@@ -9,6 +9,30 @@ import 'widgets.dart';
 import 'discussion_assistant.dart';
 import 'daily_focus_card.dart';
 import 'community_post_image.dart';
+import 'api_feed_repository.dart';
+import 'quote_dialog.dart';
+import 'public_profile_screen.dart';
+import 'people_search_screen.dart';
+
+void openPublicProfile(BuildContext context, String personId) {
+  final repository = context.read<AppState>().repository;
+
+  if (repository is! ApiFeedRepository) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text('Public profiles require the connected backend.'),
+      ),
+    );
+    return;
+  }
+
+  Navigator.of(context).push(
+    MaterialPageRoute<void>(
+      builder: (_) =>
+          PublicProfileScreen(personId: personId, repository: repository),
+    ),
+  );
+}
 
 void openEditor(BuildContext context, EditorKind kind, {String? id}) {
   Navigator.pushNamed(
@@ -175,12 +199,134 @@ class _HomeScreenState extends State<HomeScreen> {
 class TodayPage extends StatelessWidget {
   const TodayPage({super.key});
 
+  Future<void> showMotivation(BuildContext context) async {
+    final state = context.read<AppState>();
+
+    if (state.busy || state.data == null) return;
+
+    final repository = state.repository;
+
+    if (repository is! ApiFeedRepository) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Personalized motivation requires the backend.'),
+        ),
+      );
+      return;
+    }
+
+    final goals = state.data!.goals;
+
+    if (goals.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Create a goal first to get relevant encouragement.'),
+        ),
+      );
+      return;
+    }
+
+    // Choose which goal the encouragement should focus on.
+    final String? goalId;
+
+    if (goals.length == 1) {
+      goalId = goals.first.id;
+    } else {
+      goalId = await showDialog<String>(
+        context: context,
+        builder: (dialogContext) => SimpleDialog(
+          title: const Text('Which goal needs encouragement?'),
+          children: goals.map((goal) {
+            return SimpleDialogOption(
+              onPressed: () => Navigator.pop(dialogContext, goal.id),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(vertical: 8),
+                child: Text(goal.title),
+              ),
+            );
+          }).toList(),
+        ),
+      );
+    }
+
+    if (!context.mounted || goalId == null) return;
+
+    // Read fresh data after the goal-selection dialog closes.
+    final current = state.data;
+    if (current == null) return;
+
+    final goal = findById(current.goals, goalId, (item) => item.id);
+
+    if (goal == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('That goal is no longer available.')),
+      );
+      return;
+    }
+
+    final habits = current.habits
+        .where((habit) => habit.goalId == goal.id)
+        .toList();
+
+    final completed = habits.where((habit) => habit.completedToday).length;
+
+    String shorten(String value, int maximum) {
+      final text = value.trim().replaceAll(RegExp(r'\s+'), ' ');
+
+      if (text.length <= maximum) return text;
+
+      return '${text.substring(0, maximum - 1)}…';
+    }
+
+    // Limit the context to fit the endpoint's 2,000-character limit.
+    final contextText = StringBuffer()
+      ..writeln('My goal: ${shorten(goal.title, 100)}')
+      ..writeln('Why it matters: ${shorten(goal.reason, 300)}')
+      ..writeln()
+      ..writeln(
+        'Today: $completed of ${habits.length} linked habits '
+        'are checked in.',
+      );
+
+    if (habits.isEmpty) {
+      contextText.writeln('No habits are linked to this goal yet.');
+    } else {
+      contextText.writeln('Linked habits (up to 8 shown):');
+
+      for (final habit in habits.take(8)) {
+        final status = habit.completedToday
+            ? 'checked in today'
+            : 'not checked in today';
+
+        contextText.writeln('- ${shorten(habit.title, 100)}: $status');
+      }
+
+      if (habits.length > 8) {
+        contextText.writeln(
+          '${habits.length - 8} additional habits are not listed.',
+        );
+      }
+    }
+
+    await showDialog<void>(
+      context: context,
+      builder: (_) => QuoteDialog(
+        initialText: contextText.toString().trim(),
+        generate: (text, tone) =>
+            repository.generateQuote(text: text, tone: tone),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final state = context.watch<AppState>();
-    final data = state.data!;
+    final data = state.data;
 
-    // This variable belongs to TodayPage.
+    if (data == null) {
+      return const Center(child: CircularProgressIndicator());
+    }
+
     final completed = data.habits.where((habit) => habit.completedToday).length;
 
     final colors = Theme.of(context).colorScheme;
@@ -231,6 +377,38 @@ class TodayPage extends StatelessWidget {
           ),
         ),
         const SizedBox(height: 24),
+
+        // Personal motivation, separate from community posts.
+        SurfaceCard(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Icon(Icons.favorite_outline, color: colors.primary),
+              const SizedBox(height: 12),
+              Text(
+                'A little encouragement',
+                style: Theme.of(context).textTheme.titleLarge,
+              ),
+              const SizedBox(height: 8),
+              const Text(
+                'Get encouragement based on your goal, its linked habits, '
+                'and today’s check-ins.',
+              ),
+              const SizedBox(height: 8),
+              const Text(
+                'Nothing is posted to the community. '
+                'You choose what to share with AI.',
+              ),
+              const SizedBox(height: 16),
+              FilledButton.icon(
+                onPressed: state.busy ? null : () => showMotivation(context),
+                icon: const Icon(Icons.auto_awesome_outlined),
+                label: const Text('Find encouragement'),
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 16),
         const DailyFocusCard(),
         const SizedBox(height: 16),
         SectionTitle(
@@ -271,12 +449,6 @@ class TodayPage extends StatelessWidget {
               ),
             ],
           ),
-        ),
-        const SizedBox(height: 12),
-        Text(
-          'Local demo • Changes reset when the app restarts. '
-          'Community seed posts are fictional.',
-          style: Theme.of(context).textTheme.bodySmall,
         ),
       ],
     );
@@ -599,6 +771,35 @@ class _CommunityPageState extends State<CommunityPage> {
             label: const Text('Create post'),
           ),
         ),
+        Align(
+          alignment: Alignment.centerLeft,
+          child: OutlinedButton.icon(
+            onPressed: state.busy
+                ? null
+                : () {
+                    final repository = state.repository;
+
+                    if (repository is! ApiFeedRepository) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(
+                          content: Text('People search requires the backend.'),
+                        ),
+                      );
+                      return;
+                    }
+
+                    Navigator.of(context).push(
+                      MaterialPageRoute<void>(
+                        builder: (_) =>
+                            PeopleSearchScreen(repository: repository),
+                      ),
+                    );
+                  },
+            icon: const Icon(Icons.person_search_outlined),
+            label: const Text('Find people'),
+          ),
+        ),
+        const SizedBox(height: 12),
         TextField(
           decoration: const InputDecoration(
             labelText: 'Search community',
@@ -730,9 +931,19 @@ class PostCard extends StatelessWidget {
           Text(post.body, maxLines: 3, overflow: TextOverflow.ellipsis),
           CommunityPostImage(post: post),
           const SizedBox(height: 12),
-          Text(
-            '$author • ${post.comments.length} comments',
-            style: Theme.of(context).textTheme.bodySmall,
+          Wrap(
+            spacing: 8,
+            crossAxisAlignment: WrapCrossAlignment.center,
+            children: [
+              TextButton(
+                onPressed: () => openPublicProfile(context, post.authorId),
+                child: Text(author),
+              ),
+              Text(
+                '${post.comments.length} comments',
+                style: Theme.of(context).textTheme.bodySmall,
+              ),
+            ],
           ),
           const SizedBox(height: 12),
           Wrap(
@@ -1106,7 +1317,10 @@ class _PostDetailScreenState extends State<PostDetailScreen> {
                     style: Theme.of(context).textTheme.headlineSmall,
                   ),
                   const SizedBox(height: 8),
-                  Text(ownPost ? data.profile.name : post.author),
+                  TextButton(
+                    onPressed: () => openPublicProfile(context, post.authorId),
+                    child: Text(ownPost ? data.profile.name : post.author),
+                  ),
                   const SizedBox(height: 20),
                   Text(post.body, style: Theme.of(context).textTheme.bodyLarge),
                   Text(post.body, style: Theme.of(context).textTheme.bodyLarge),
@@ -1350,6 +1564,12 @@ class ProfilePage extends StatelessWidget {
 
     return PageBody(
       children: [
+        OutlinedButton.icon(
+          onPressed: () => openPublicProfile(context, state.userId),
+          icon: const Icon(Icons.public),
+          label: const Text('View my public profile'),
+        ),
+        const SizedBox(height: 12),
         const SizedBox(height: 20),
 
         if (auth.error != null)

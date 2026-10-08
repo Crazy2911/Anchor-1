@@ -6,6 +6,7 @@ import 'package:http/http.dart' as http;
 import 'models.dart';
 import 'repository.dart';
 import 'dart:typed_data';
+import 'public_profile.dart';
 
 class ApiFeedRepository extends MemoryAnchorRepository {
   final String baseUrl;
@@ -23,6 +24,89 @@ class ApiFeedRepository extends MemoryAnchorRepository {
         : baseUrl;
   }
 
+  Future<List<PersonSearchResult>> searchPeople(String query) async {
+    final response = await _request(
+      'GET',
+      '/people?q=${Uri.encodeQueryComponent(query.trim())}',
+    );
+
+    try {
+      final users = response['users'];
+
+      if (users is! List) {
+        throw const FormatException('Missing search results.');
+      }
+
+      return users.map((value) {
+        if (value is! Map<String, dynamic>) {
+          throw const FormatException('Invalid person.');
+        }
+
+        return PersonSearchResult.fromJson(value);
+      }).toList();
+    } on FormatException {
+      throw const RepositoryException('Search results could not be displayed.');
+    }
+  }
+
+  Future<PublicProfile> getPublicProfile(String personId) async {
+    final response = await _request(
+      'GET',
+      '/people/${Uri.encodeComponent(personId)}',
+    );
+
+    try {
+      final profile = response['profile'];
+
+      if (profile is! Map<String, dynamic>) {
+        throw const FormatException('Missing profile.');
+      }
+
+      return PublicProfile.fromJson(profile);
+    } on FormatException {
+      throw const RepositoryException('The profile could not be displayed.');
+    }
+  }
+
+  Future<void> setFollowing(String personId, {required bool following}) async {
+    await _request(
+      following ? 'PUT' : 'DELETE',
+      '/people/${Uri.encodeComponent(personId)}/follow',
+    );
+  }
+
+  Future<String> generateQuote({
+    required String text,
+    required String tone,
+  }) async {
+    final response = await _request(
+      'POST',
+      '/ai/quote',
+      body: {'text': text, 'tone': tone},
+      timeout: const Duration(seconds: 90),
+    );
+
+    final result = response['result'];
+
+    if (result is! Map<String, dynamic>) {
+      throw const RepositoryException(
+        'The server returned an invalid quote response.',
+      );
+    }
+
+    final quote = result['quote'];
+
+    if (quote is! String ||
+        quote.trim().length < 10 ||
+        quote.trim().length > 240) {
+      throw const RepositoryException(
+        'The generated quote could not be displayed.',
+      );
+    }
+
+    return quote.trim();
+  }
+
   // ---------------------------------------------------------------------------
   // HTTP REQUESTS
   // ---------------------------------------------------------------------------
@@ -31,6 +115,7 @@ class ApiFeedRepository extends MemoryAnchorRepository {
     String method,
     String path, {
     Map<String, dynamic>? body,
+    Duration timeout = const Duration(seconds: 60),
   }) async {
     final client = http.Client();
 
@@ -48,7 +133,7 @@ class ApiFeedRepository extends MemoryAnchorRepository {
       final response = await (() async {
         final streamed = await client.send(request);
         return http.Response.fromStream(streamed);
-      })().timeout(const Duration(seconds: 60));
+      })().timeout(timeout);
 
       final decoded = jsonDecode(utf8.decode(response.bodyBytes));
 
