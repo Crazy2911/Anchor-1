@@ -3,7 +3,7 @@ import logging
 import os
 import image_service
 from storage_service import StorageError, create_signed_url
-
+import people
 import psycopg
 from fastapi import Depends, FastAPI, Request
 from fastapi.exceptions import RequestValidationError
@@ -838,3 +838,56 @@ def get_post_image(post_id: str):
         "imageUrl": image_url,
         "expiresIn": 900,
     }
+@app.exception_handler(people.PeopleError)
+async def people_error_handler(
+    request: Request,
+    error: people.PeopleError,
+):
+    return JSONResponse(
+        status_code=error.status,
+        content={"message": error.message},
+        headers={"Cache-Control": "no-store"},
+    )
+
+
+@app.get("/people/{person_id}")
+def get_person_profile(
+    person_id: str,
+    user: dict = Depends(require_user),
+):
+    valid_id(person_id)
+
+    return {
+        "profile": people.read_profile(
+            person_id,
+            viewer_id=user["id"],
+        ),
+    }
+
+
+@app.put("/people/{person_id}/follow")
+def follow_person(
+    person_id: str,
+    user: dict = Depends(require_user),
+):
+    valid_id(person_id)
+
+    return people.set_follow(
+        viewer_id=user["id"],
+        person_id=person_id,
+        enabled=True,
+    )
+
+
+@app.delete("/people/{person_id}/follow")
+def unfollow_person(
+    person_id: str,
+    user: dict = Depends(require_user),
+):
+    valid_id(person_id)
+
+    return people.set_follow(
+        viewer_id=user["id"],
+        person_id=person_id,
+        enabled=False,
+    )

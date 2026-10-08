@@ -862,6 +862,16 @@ Rules:
   prioritize compassionate encouragement to seek immediate human help.
 - Do not include quotation marks around the entire quote.
 - Do not include hashtags, markdown fences, or additional fields.
+- When goal and habit information is supplied, make the encouragement
+  specific to that goal and the available check-ins.
+- A checked-in habit supports acknowledging that action today only.
+- "Not checked in" does not prove the person failed or skipped the action.
+- Do not invent streaks, previous progress, emotions, or future results.
+- When no habits are checked in, offer gentle encouragement toward
+  one small relevant action without guilt or pressure.
+- When all linked habits are checked in, acknowledge the effort
+  without pressuring the person to do more.
+- When no habits exist, encourage a small starting action.
 """.strip()
 
 
