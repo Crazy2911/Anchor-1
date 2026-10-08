@@ -205,47 +205,51 @@ def text_field(data, key, minimum, maximum):
 # COMMUNITY READS
 # ---------------------------------------------------------------------------
 
-def read_posts(post_id=None):
+def read_posts(post_id=None, author_id=None):
+    conditions = []
+    parameters = []
+
+    if post_id is not None:
+        conditions.append("p.id = %s")
+        parameters.append(post_id)
+
+    if author_id is not None:
+        conditions.append("p.author_id = %s")
+        parameters.append(author_id)
+
+    where = (
+        "WHERE " + " AND ".join(conditions)
+        if conditions
+        else ""
+    )
+
     with connect() as connection:
         connection.execute(
             "SET TRANSACTION ISOLATION LEVEL REPEATABLE READ"
         )
 
-        if post_id is None:
-            posts = connection.execute(
-                """
-                SELECT id, author_id, author, title, body, topic
-                FROM posts
-                ORDER BY created_at DESC, id ASC
-                """
-            ).fetchall()
+        posts = connection.execute(
+            f"""
+            SELECT p.id, p.author_id, p.author,
+                   p.title, p.body, p.topic
+            FROM posts AS p
+            {where}
+            ORDER BY p.created_at DESC, p.id ASC
+            """,
+            tuple(parameters),
+        ).fetchall()
 
-            comments = connection.execute(
-                """
-                SELECT id, post_id, author_id, author, body, parent_id
-                FROM comments
-                ORDER BY created_at ASC, id ASC
-                """
-            ).fetchall()
-        else:
-            posts = connection.execute(
-                """
-                SELECT id, author_id, author, title, body, topic
-                FROM posts
-                WHERE id = %s
-                """,
-                (post_id,),
-            ).fetchall()
-
-            comments = connection.execute(
-                """
-                SELECT id, post_id, author_id, author, body, parent_id
-                FROM comments
-                WHERE post_id = %s
-                ORDER BY created_at ASC, id ASC
-                """,
-                (post_id,),
-            ).fetchall()
+        comments = connection.execute(
+            f"""
+            SELECT c.id, c.post_id, c.author_id,
+                   c.author, c.body, c.parent_id
+            FROM comments AS c
+            JOIN posts AS p ON p.id = c.post_id
+            {where}
+            ORDER BY c.created_at ASC, c.id ASC
+            """,
+            tuple(parameters),
+        ).fetchall()
 
     comments_by_post = {}
 
@@ -795,6 +799,21 @@ def set_post_image(
         "postId": post_id,
         "imageId": image_id,
     }
+@app.get("/posts/{post_id}")
+def get_post(
+    post_id: str,
+    user: dict = Depends(require_user),
+):
+    valid_id(post_id)
+    posts = read_posts(post_id=post_id)
+
+    if not posts:
+        raise HTTPException(
+            status_code=404,
+            detail="This post no longer exists.",
+        )
+
+    return {"post": posts[0]}
 @app.get("/posts/{post_id}/image")
 def get_post_image(post_id: str):
     with connect() as connection:
@@ -849,7 +868,129 @@ async def people_error_handler(
         headers={"Cache-Control": "no-store"},
     )
 
+@app.get("/people/{person_id}/followers")
+def get_followers(
+    person_id: str,
+    limit: int = 30,
+    offset: int = 0,
+    user: dict = Depends(require_user),
+):
+    valid_id(person_id)
 
+    return people.list_connections(
+        person_id,
+        user["id"],
+        followers=True,
+        limit=limit,
+        offset=offset,
+    )
+@app.get("/feed/following")
+def following_feed(
+    offset: int = 0,
+    user: dict = Depends(require_user),
+):
+    if offset < 0:
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid offset.",
+        )
+
+    page_size = 30
+
+    with connect() as connection:
+        connection.execute(
+            "SET TRANSACTION ISOLATION LEVEL REPEATABLE READ"
+        )
+
+        rows = connection.execute(
+            """
+            SELECT
+                p.id,
+                p.author_id,
+                p.author,
+                p.title,
+                p.body,
+                p.topic
+            FROM posts p
+            WHERE EXISTS (
+                SELECT 1
+                FROM user_follows f
+                WHERE f.follower_id = %s
+                  AND f.following_id = p.author_id
+            )
+            ORDER BY p.created_at DESC, p.id DESC
+            LIMIT %s OFFSET %s
+            """,
+            (user["id"], page_size + 1, offset),
+        ).fetchall()
+
+        has_more = len(rows) > page_size
+        selected = rows[:page_size]
+
+        if not selected:
+            return {"posts": [], "hasMore": False}
+
+        comments = connection.execute(
+            """
+            SELECT
+                id,
+                post_id,
+                author_id,
+                author,
+                body,
+                parent_id
+            FROM comments
+            WHERE post_id = ANY(%s)
+            ORDER BY created_at ASC, id ASC
+            """,
+            ([post["id"] for post in selected],),
+        ).fetchall()
+
+    grouped = {}
+
+    for comment in comments:
+        grouped.setdefault(comment["post_id"], []).append(
+            {
+                "id": comment["id"],
+                "authorId": comment["author_id"],
+                "author": comment["author"],
+                "body": comment["body"],
+                "parentId": comment["parent_id"],
+            }
+        )
+
+    return {
+        "posts": [
+            {
+                "id": post["id"],
+                "authorId": post["author_id"],
+                "author": post["author"],
+                "title": post["title"],
+                "body": post["body"],
+                "topic": post["topic"],
+                "comments": grouped.get(post["id"], []),
+            }
+            for post in selected
+        ],
+        "hasMore": has_more,
+    }
+
+@app.get("/people/{person_id}/following")
+def get_following(
+    person_id: str,
+    limit: int = 30,
+    offset: int = 0,
+    user: dict = Depends(require_user),
+):
+    valid_id(person_id)
+
+    return people.list_connections(
+        person_id,
+        user["id"],
+        followers=False,
+        limit=limit,
+        offset=offset,
+    )
 @app.get("/people/{person_id}")
 def get_person_profile(
     person_id: str,
@@ -900,3 +1041,13 @@ def search_people(
         q,
         viewer_id=user["id"],
     )
+@app.get("/people/{person_id}/posts")
+def get_person_posts(
+    person_id: str,
+    user: dict = Depends(require_user),
+):
+    valid_id(person_id)
+
+    return {
+        "posts": read_posts(author_id=person_id),
+    }

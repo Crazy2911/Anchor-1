@@ -165,3 +165,65 @@ def search_people(query, viewer_id):
             for row in rows
         ],
     }
+def list_connections(
+    person_id,
+    viewer_id,
+    *,
+    followers,
+    limit=30,
+    offset=0,
+):
+    if not 1 <= limit <= 50 or offset < 0:
+        raise PeopleError(400, "Invalid pagination.")
+
+    # These SQL fragments are fixed strings, never user input.
+    if followers:
+        account_column = "f.follower_id"
+        filter_column = "f.following_id"
+    else:
+        account_column = "f.following_id"
+        filter_column = "f.follower_id"
+
+    with connect() as connection:
+        account = connection.execute(
+            "SELECT id FROM accounts WHERE id = %s",
+            (person_id,),
+        ).fetchone()
+
+        if account is None:
+            raise PeopleError(404, "User not found.")
+
+        rows = connection.execute(
+            f"""
+            SELECT
+                a.id,
+                a.username,
+                a.display_name,
+                EXISTS (
+                    SELECT 1
+                    FROM user_follows mine
+                    WHERE mine.follower_id = %s
+                      AND mine.following_id = a.id
+                ) AS is_following
+            FROM user_follows f
+            JOIN accounts a ON a.id = {account_column}
+            WHERE {filter_column} = %s
+            ORDER BY a.username, a.id
+            LIMIT %s OFFSET %s
+            """,
+            (viewer_id, person_id, limit + 1, offset),
+        ).fetchall()
+
+    return {
+        "users": [
+            {
+                "id": row["id"],
+                "username": row["username"],
+                "displayName": row["display_name"],
+                "isFollowing": row["is_following"],
+                "isMe": row["id"] == viewer_id,
+            }
+            for row in rows[:limit]
+        ],
+        "hasMore": len(rows) > limit,
+    }

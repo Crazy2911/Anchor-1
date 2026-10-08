@@ -17,11 +17,99 @@ class ApiFeedRepository extends MemoryAnchorRepository {
     required this.token,
     required super.userId,
   });
+  Future<({List<CommunityPost> posts, bool hasMore})> getFollowingFeed({
+    int offset = 0,
+  }) async {
+    final response = await _request('GET', '/feed/following?offset=$offset');
+
+    try {
+      final values = response['posts'];
+      final hasMore = response['hasMore'];
+
+      if (values is! List || hasMore is! bool) {
+        throw const FormatException('Invalid feed response.');
+      }
+
+      return (
+        posts: values.map<CommunityPost>(_parsePost).toList(),
+        hasMore: hasMore,
+      );
+    } on FormatException {
+      throw const RepositoryException(
+        'The following feed could not be displayed.',
+      );
+    }
+  }
 
   String get _root {
     return baseUrl.endsWith('/')
         ? baseUrl.substring(0, baseUrl.length - 1)
         : baseUrl;
+  }
+
+  Future<({List<PersonSearchResult> users, bool hasMore})> getConnections({
+    required String personId,
+    required bool followers,
+    int offset = 0,
+  }) async {
+    final kind = followers ? 'followers' : 'following';
+
+    final response = await _request(
+      'GET',
+      '/people/${Uri.encodeComponent(personId)}/$kind'
+          '?limit=30&offset=$offset',
+    );
+
+    try {
+      final values = response['users'];
+      final hasMore = response['hasMore'];
+
+      if (values is! List || hasMore is! bool) {
+        throw const FormatException('Invalid people response.');
+      }
+
+      final users = values.map((value) {
+        if (value is! Map<String, dynamic>) {
+          throw const FormatException('Invalid person.');
+        }
+
+        return PersonSearchResult.fromJson(value);
+      }).toList();
+
+      return (users: users, hasMore: hasMore);
+    } on FormatException {
+      throw const RepositoryException(
+        'The people list could not be displayed.',
+      );
+    }
+  }
+
+  Future<CommunityPost> getPost(String postId) async {
+    final response = await _request(
+      'GET',
+      '/posts/${Uri.encodeComponent(postId)}',
+    );
+
+    try {
+      return _parsePost(response['post']);
+    } on FormatException {
+      throw const RepositoryException('The server returned an invalid post.');
+    }
+  }
+
+  Future<List<CommunityPost>> getPersonPosts(String personId) async {
+    final response = await _request(
+      'GET',
+      '/people/${Uri.encodeComponent(personId)}/posts',
+    );
+
+    try {
+      return _list(response, 'posts').map<CommunityPost>(_parsePost).toList();
+    } on FormatException {
+      throw const RepositoryException(
+        'This person’s posts could not be displayed.',
+      );
+    }
   }
 
   Future<List<PersonSearchResult>> searchPeople(String query) async {

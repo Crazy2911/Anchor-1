@@ -13,6 +13,7 @@ import 'api_feed_repository.dart';
 import 'quote_dialog.dart';
 import 'public_profile_screen.dart';
 import 'people_search_screen.dart';
+import 'following_feed_screen.dart';
 
 void openPublicProfile(BuildContext context, String personId) {
   final repository = context.read<AppState>().repository;
@@ -134,6 +135,7 @@ class _HomeScreenState extends State<HomeScreen> {
             child: Column(
               children: [
                 const ErrorNotice(),
+
                 if (state.busy) const LinearProgressIndicator(minHeight: 2),
                 Expanded(
                   child: Row(
@@ -718,6 +720,7 @@ class _CommunityPageState extends State<CommunityPage> {
   Widget build(BuildContext context) {
     final state = context.watch<AppState>();
     final data = state.data;
+    final repository = state.repository;
 
     if (data == null) {
       return const Center(child: CircularProgressIndicator());
@@ -800,6 +803,23 @@ class _CommunityPageState extends State<CommunityPage> {
           ),
         ),
         const SizedBox(height: 12),
+        if (repository is ApiFeedRepository) ...[
+          Align(
+            alignment: Alignment.centerLeft,
+            child: OutlinedButton.icon(
+              onPressed: () {
+                Navigator.of(context).push(
+                  MaterialPageRoute<void>(
+                    builder: (_) => FollowingFeedScreen(repository: repository),
+                  ),
+                );
+              },
+              icon: const Icon(Icons.people_outline),
+              label: const Text('Posts from people I follow'),
+            ),
+          ),
+          const SizedBox(height: 12),
+        ],
         TextField(
           decoration: const InputDecoration(
             labelText: 'Search community',
@@ -995,6 +1015,85 @@ class _PostDetailScreenState extends State<PostDetailScreen> {
   String? replyAuthor;
 
   bool summarizing = false;
+  CommunityPost? loadedPost;
+  bool postLoading = true;
+  String? postError;
+
+  @override
+  void initState() {
+    super.initState();
+    loadPost();
+  }
+
+  Future<void> editPost() async {
+    final state = context.read<AppState>();
+    if (state.busy) return;
+
+    // The editor currently reads its existing post from AppState.
+    await state.load();
+
+    if (!mounted) return;
+
+    final data = state.data;
+    final existing = data == null
+        ? null
+        : findById(data.posts, widget.postId, (item) => item.id);
+
+    if (state.error != null || existing == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(state.error ?? 'Could not load this post for editing.'),
+        ),
+      );
+      return;
+    }
+
+    await Navigator.of(context).pushNamed(
+      '/edit',
+      arguments: EditorArgs(kind: EditorKind.post, id: widget.postId),
+    );
+
+    if (!mounted) return;
+    await loadPost();
+  }
+
+  Future<void> loadPost() async {
+    final repository = context.read<AppState>().repository;
+
+    setState(() {
+      postLoading = true;
+      postError = null;
+    });
+
+    try {
+      if (repository is! ApiFeedRepository) {
+        throw const RepositoryException(
+          'Connect to the server to load this discussion.',
+        );
+      }
+
+      final result = await repository.getPost(widget.postId);
+
+      if (!mounted) return;
+
+      setState(() {
+        loadedPost = result;
+      });
+    } catch (error) {
+      if (!mounted) return;
+
+      setState(() {
+        postError = error is RepositoryException
+            ? error.message
+            : 'Could not load this discussion. Please try again.';
+      });
+    } finally {
+      if (mounted) {
+        setState(() => postLoading = false);
+      }
+    }
+  }
+
   Future<void> summarizeDiscussion() async {
     final state = context.read<AppState>();
     final assistant = state.discussionAssistant;
@@ -1010,7 +1109,7 @@ class _PostDetailScreenState extends State<PostDetailScreen> {
       return;
     }
 
-    final post = findById(state.data!.posts, widget.postId, (item) => item.id);
+    final post = loadedPost;
 
     if (post == null) return;
 
@@ -1169,7 +1268,7 @@ class _PostDetailScreenState extends State<PostDetailScreen> {
       ),
     );
 
-    if (!success || !mounted) return;
+    if (!mounted) return;
     if (!success) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
@@ -1192,6 +1291,7 @@ class _PostDetailScreenState extends State<PostDetailScreen> {
       replyTo = null;
       replyAuthor = null;
     });
+    await loadPost();
   }
 
   Future<void> report() async {
@@ -1279,9 +1379,35 @@ class _PostDetailScreenState extends State<PostDetailScreen> {
 
     if (data == null) return const MissingScreen();
 
-    final post = findById(data.posts, widget.postId, (item) => item.id);
+    final post = loadedPost;
 
-    if (post == null) return const MissingScreen();
+    if (post == null) {
+      return Scaffold(
+        appBar: AppBar(title: const Text('Discussion')),
+        body: Center(
+          child: postLoading
+              ? const CircularProgressIndicator()
+              : Padding(
+                  padding: const EdgeInsets.all(24),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(
+                        postError ?? 'This post is unavailable.',
+                        textAlign: TextAlign.center,
+                      ),
+                      const SizedBox(height: 16),
+                      FilledButton.icon(
+                        onPressed: loadPost,
+                        icon: const Icon(Icons.refresh),
+                        label: const Text('Try again'),
+                      ),
+                    ],
+                  ),
+                ),
+        ),
+      );
+    }
 
     final ownPost = post.authorId == state.userId;
     final helpful = data.helpfulPostIds.contains(post.id);
@@ -1293,7 +1419,7 @@ class _PostDetailScreenState extends State<PostDetailScreen> {
         actions: [
           IconButton(
             tooltip: 'Refresh discussion',
-            onPressed: state.busy ? null : state.load,
+            onPressed: state.busy || postLoading ? null : loadPost,
             icon: const Icon(Icons.refresh),
           ),
         ],
@@ -1303,6 +1429,16 @@ class _PostDetailScreenState extends State<PostDetailScreen> {
         child: Column(
           children: [
             const ErrorNotice(),
+            if (postLoading) const LinearProgressIndicator(minHeight: 2),
+
+            if (postError != null)
+              Padding(
+                padding: const EdgeInsets.all(12),
+                child: Text(
+                  postError!,
+                  style: TextStyle(color: Theme.of(context).colorScheme.error),
+                ),
+              ),
             if (state.busy) const LinearProgressIndicator(minHeight: 2),
             Expanded(
               child: PageBody(
@@ -1364,13 +1500,9 @@ class _PostDetailScreenState extends State<PostDetailScreen> {
                       ),
                       if (ownPost) ...[
                         TextButton(
-                          onPressed: state.busy
+                          onPressed: state.busy || postLoading
                               ? null
-                              : () => openEditor(
-                                  context,
-                                  EditorKind.post,
-                                  id: post.id,
-                                ),
+                              : editPost,
                           child: const Text('Edit'),
                         ),
                         TextButton(
@@ -1524,6 +1656,7 @@ class SavedScreen extends StatelessWidget {
         child: Column(
           children: [
             const ErrorNotice(),
+
             if (state.busy) const LinearProgressIndicator(minHeight: 2),
             Expanded(
               child: PageBody(

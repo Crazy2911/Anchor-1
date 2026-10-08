@@ -1,10 +1,11 @@
 import 'package:flutter/material.dart';
-import 'package:provider/provider.dart';
 
 import 'api_feed_repository.dart';
-import 'app_state.dart';
+
 import 'public_profile.dart';
 import 'repository.dart';
+import 'connections_screen.dart';
+import 'models.dart';
 
 class PublicProfileScreen extends StatefulWidget {
   final String personId;
@@ -22,6 +23,7 @@ class PublicProfileScreen extends StatefulWidget {
 
 class _PublicProfileScreenState extends State<PublicProfileScreen> {
   PublicProfile? profile;
+  List<CommunityPost> personPosts = [];
   bool busy = false;
   bool needsRefresh = false;
   String? error;
@@ -30,6 +32,22 @@ class _PublicProfileScreenState extends State<PublicProfileScreen> {
   void initState() {
     super.initState();
     loadProfile();
+  }
+
+  Future<void> openConnections({required bool followers}) async {
+    await Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => ConnectionsScreen(
+          personId: widget.personId,
+          followers: followers,
+          repository: widget.repository,
+        ),
+      ),
+    );
+
+    if (!mounted) return;
+
+    await loadProfile();
   }
 
   String message(Object exception) {
@@ -46,12 +64,16 @@ class _PublicProfileScreenState extends State<PublicProfileScreen> {
     });
 
     try {
-      final result = await widget.repository.getPublicProfile(widget.personId);
+      final loaded = await Future.wait<Object>([
+        widget.repository.getPublicProfile(widget.personId),
+        widget.repository.getPersonPosts(widget.personId),
+      ]);
 
       if (!mounted) return;
 
       setState(() {
-        profile = result;
+        profile = loaded[0] as PublicProfile;
+        personPosts = loaded[1] as List<CommunityPost>;
         needsRefresh = false;
       });
     } catch (exception) {
@@ -126,11 +148,7 @@ class _PublicProfileScreenState extends State<PublicProfileScreen> {
   @override
   Widget build(BuildContext context) {
     final current = profile;
-    final data = context.watch<AppState>().data;
-
-    final posts = data?.posts
-        .where((post) => post.authorId == widget.personId)
-        .toList();
+    final posts = personPosts;
 
     return Scaffold(
       appBar: AppBar(
@@ -190,8 +208,14 @@ class _PublicProfileScreenState extends State<PublicProfileScreen> {
                     runSpacing: 16,
                     children: [
                       stat('Posts', current.postCount),
-                      stat('Followers', current.followerCount),
-                      stat('Following', current.followingCount),
+                      OutlinedButton(
+                        onPressed: () => openConnections(followers: true),
+                        child: Text('${profile!.followerCount} followers'),
+                      ),
+                      OutlinedButton(
+                        onPressed: () => openConnections(followers: false),
+                        child: Text('${profile!.followingCount} following'),
+                      ),
                     ],
                   ),
                   const SizedBox(height: 20),
@@ -217,10 +241,8 @@ class _PublicProfileScreenState extends State<PublicProfileScreen> {
                     style: Theme.of(context).textTheme.titleLarge,
                   ),
                   const SizedBox(height: 8),
-                  if (posts == null)
-                    const Text('Community posts are not loaded yet.')
-                  else if (posts.isEmpty)
-                    const Text('No posts in the currently loaded feed.')
+                  if (posts.isEmpty)
+                    const Text('This person has not published any posts yet.')
                   else
                     ...posts.map(
                       (post) => Card(
