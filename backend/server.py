@@ -891,4 +891,12 @@ def unfollow_person(
         person_id=person_id,
         enabled=False,
     )
-server.py
+@app.get("/people")
+def search_people(
+    q: str = "",
+    user: dict = Depends(require_user),
+):
+    return people.search_people(
+        q,
+        viewer_id=user["id"],
+    )
