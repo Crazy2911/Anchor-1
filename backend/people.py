@@ -115,3 +115,53 @@ def set_follow(viewer_id, person_id, enabled):
         "personId": person_id,
         "following": enabled,
     }
+def search_people(query, viewer_id):
+    if not isinstance(query, str):
+        raise PeopleError(400, "Enter a name or username.")
+
+    query = query.strip()
+
+    if query.startswith("@"):
+        query = query[1:].strip()
+
+    if not 2 <= len(query) <= 80:
+        raise PeopleError(400, "Search using 2–80 characters.")
+
+    with connect() as connection:
+        rows = connection.execute(
+            """
+            SELECT
+                a.id,
+                a.username,
+                a.display_name,
+                EXISTS (
+                    SELECT 1
+                    FROM user_follows AS f
+                    WHERE f.follower_id = %s
+                      AND f.following_id = a.id
+                ) AS is_following
+            FROM accounts AS a
+            WHERE POSITION(LOWER(%s) IN LOWER(a.username)) > 0
+               OR POSITION(LOWER(%s) IN LOWER(a.display_name)) > 0
+            ORDER BY
+                CASE WHEN LOWER(a.username) = LOWER(%s)
+                     THEN 0 ELSE 1 END,
+                a.username,
+                a.id
+            LIMIT 20
+            """,
+            (viewer_id, query, query, query),
+        ).fetchall()
+
+    return {
+        "users": [
+            {
+                "id": row["id"],
+                "username": row["username"],
+                "displayName": row["display_name"],
+                "isFollowing": row["is_following"],
+                "isMe": row["id"] == viewer_id,
+            }
+            for row in rows
+        ],
+    }
