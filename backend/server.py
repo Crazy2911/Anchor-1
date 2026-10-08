@@ -631,7 +631,12 @@ def plan(
 
     return ai_service.plan(data, goal=goal)
 
-
+@app.post("/ai/quote")
+def generate_encouragement_quote(
+    user: dict = Depends(require_user),
+    data: dict = Depends(json_body),
+):
+    return ai_service.generate_quote(data)
 @app.post("/ai/improve-post")
 def improve_post(
     user: dict = Depends(require_user),
